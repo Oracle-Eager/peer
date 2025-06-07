@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aura Connect - P2P Comms</title>
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .glass-panel { background-color: rgba(30, 41, 59, 0.7); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.08); }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(100, 116, 139, 0.5); border-radius: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(100, 116, 139, 0.7); }
+        .aurora-bg { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; overflow: hidden; background-color: #0f172a; }
+        .aurora-bg::before, .aurora-bg::after { content: ''; position: absolute; width: 600px; height: 600px; border-radius: 50%; opacity: 0.3; filter: blur(100px); }
+        .aurora-bg::before { background: radial-gradient(circle, #38bdf8, transparent 60%); top: -10%; left: -10%; animation: aurora-pulse-1 25s infinite alternate ease-in-out; }
+        .aurora-bg::after { background: radial-gradient(circle, #8b5cf6, transparent 60%); bottom: -10%; right: -10%; animation: aurora-pulse-2 30s infinite alternate ease-in-out; }
+        @keyframes aurora-pulse-1 { 0% { transform: scale(0.8) translate(0,0); } 100% { transform: scale(1.2) translate(50px, -50px); } }
+        @keyframes aurora-pulse-2 { 0% { transform: scale(0.8) translate(0,0); } 100% { transform: scale(1.2) translate(-50px, 50px); } }
+
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .animate-fadeIn { animation: fadeIn 0.5s ease-out forwards; }
+        @keyframes popIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+        .animate-popIn { animation: popIn 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards; }
+
+        .btn { transition: all 0.15s ease-in-out; }
+        .btn:active:not(:disabled) { transform: scale(0.96); }
+        .btn-primary { background-color: #0ea5e9; color: white; } .btn-primary:hover:not(:disabled) { background-color: #38bdf8; } .btn-primary:disabled { background-color: #334155; color: #94a3b8; cursor: not-allowed;}
+        .btn-secondary { background-color: rgba(255, 255, 255, 0.1); color: #e2e8f0; } .btn-secondary:hover { background-color: rgba(255, 255, 255, 0.15); }
+        .btn-success { background-color: #16a34a; color: white; } .btn-success:hover { background-color: #22c55e; }
+        .btn-danger { background-color: #dc2626; color: white; } .btn-danger:hover { background-color: #ef4444; }
+        input[type="text"] { background-color: rgba(15, 23, 42, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); color: #e2e8f0; }
+        input[type="text"]:focus { border-color: #0ea5e9; box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.4); }
+        #local-video { transform: scaleX(-1); }
+        .call-control-btn { background-color: rgba(0,0,0,0.4); backdrop-filter: blur(5px); } .call-control-btn:hover { background-color: rgba(0,0,0,0.6); }
+        .chat-panel-video-active { position: absolute; right: 0; top: 0; bottom: 0; width: 320px; z-index: 25; transform: translateX(100%); transition: transform 0.3s ease-in-out; }
+        .chat-panel-video-active.open { transform: translateX(0); }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-200 flex flex-col items-center justify-center min-h-screen p-3 md:p-4 overflow-hidden">
+    <div class="aurora-bg"></div>
+
+    <!-- Nickname Setup Modal -->
+    <div id="nickname-modal" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50 animate-fadeIn">
+        <div class="glass-panel rounded-xl p-8 shadow-2xl animate-popIn w-full max-w-sm text-center">
+            <h2 class="text-2xl font-bold text-white mb-6">Welcome to Aura Connect</h2>
+            <input type="text" id="modal-nickname-input" placeholder="Enter your nickname" class="w-full p-3 mb-6 rounded-lg outline-none transition text-center">
+            <button id="modal-confirm-nickname-btn" class="w-full p-3 rounded-lg font-bold btn btn-primary">Continue</button>
+        </div>
+    </div>
+
+    <!-- Main Application Container -->
+    <div id="app-container" class="hidden w-full max-w-7xl h-[95vh] max-h-[1200px] flex flex-col glass-panel rounded-2xl shadow-2xl overflow-hidden animate-fadeIn">
+        <!-- Header -->
+        <header class="flex-shrink-0 p-4 border-b border-slate-700/50 flex items-center justify-between">
+            <h1 class="text-2xl font-bold text-sky-400">Aura Connect</h1>
+            <div class="flex items-center gap-3 text-sm">
+                <span id="my-nickname-header" class="text-slate-300 font-medium"></span>
+                <div id="my-id-header-container" class="bg-slate-800/60 px-3 py-1.5 rounded-lg text-slate-400 font-mono cursor-pointer hover:bg-slate-700/60 transition" title="Copy Aura ID">
+                    <span id="my-id-header">Initializing ID...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="flex-1 flex overflow-hidden relative">
+            <!-- Connection Prompt / Peer Info Panel (Left or Full if no chat/video) -->
+            <div id="left-panel" class="w-full md:w-80 lg:w-96 p-4 flex-shrink-0 flex flex-col border-r border-slate-700/50 overflow-y-auto custom-scrollbar">
+                <!-- Connect to Peer Section -->
+                <div id="connect-section">
+                    <h2 class="text-lg font-semibold text-white mb-3">Connect to Peer</h2>
+                    <div class="flex mb-2">
+                        <input type="text" id="receiver-id-input" placeholder="Peer's Aura ID" class="flex-grow p-3 rounded-l-lg outline-none transition font-mono text-sm">
+                        <button id="connect-btn" class="p-3 rounded-r-lg font-semibold btn btn-primary flex items-center justify-center" disabled>
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path></svg>
+                        </button>
+                    </div>
+                    <p id="connection-status-text" class="text-xs text-center text-slate-400 min-h-[16px] mb-6">Enter a Peer ID to connect.</p>
+                </div>
+
+                <!-- Connected Peer Info Section -->
+                <div id="peer-info-section" class="hidden mt-auto">
+                     <hr class="border-slate-700/50 my-4">
+                    <h2 class="text-lg font-semibold text-white mb-3">Current Connection</h2>
+                    <div class="p-3 bg-slate-800/50 rounded-xl">
+                        <div class="flex items-center mb-3">
+                            <div id="peer-avatar-info" class="w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center font-bold text-white text-lg mr-3"></div>
+                            <div>
+                                <h3 id="peer-nickname-info" class="font-semibold text-white">Peer</h3>
+                                <p id="peer-id-info" class="text-xs text-slate-400 font-mono truncate max-w-[150px]"></p>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button id="start-call-btn" class="w-full p-2.5 rounded-lg font-semibold btn btn-success flex items-center justify-center gap-1.5 text-sm">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                                Call
+                            </button>
+                            <button id="disconnect-chat-btn" class="w-full p-2.5 rounded-lg font-semibold btn btn-danger flex items-center justify-center gap-1.5 text-sm">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+                                Disconnect
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat / Video Area (Right) -->
+            <div id="interaction-area" class="flex-1 flex flex-col bg-slate-900/30 overflow-hidden relative">
+                 <!-- Video Call View -->
+                <div id="video-call-view" class="hidden absolute inset-0 bg-black z-20 flex flex-col items-center justify-center animate-fadeIn">
+                    <video id="remote-video" class="w-full h-full object-contain" autoplay playsinline></video>
+                    <div id="local-video-wrapper" class="absolute w-1/5 max-w-[220px] min-w-[160px] bottom-20 md:bottom-6 right-6 rounded-lg shadow-2xl border-2 border-white/10 overflow-hidden glass-panel aspect-video cursor-grab">
+                        <video id="local-video" class="w-full h-full object-cover" autoplay muted playsinline></video>
+                    </div>
+                    
+                    <div id="call-controls-overlay" class="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center space-x-2 md:space-x-3 p-2 rounded-full shadow-lg call-control-btn opacity-0 hover:opacity-100 focus-within:opacity-100 transition-opacity duration-300">
+                        <button id="toggle-audio-btn" title="Toggle Microphone" class="p-2.5 md:p-3 rounded-full btn btn-secondary"></button>
+                        <button id="toggle-video-btn" title="Toggle Camera" class="p-2.5 md:p-3 rounded-full btn btn-secondary"></button>
+                        <button id="toggle-screen-btn" title="Share Screen" class="p-2.5 md:p-3 rounded-full btn btn-secondary"></button>
+                        <button id="pip-btn" title="Picture-in-Picture" class="p-2.5 md:p-3 rounded-full btn btn-secondary hidden md:flex items-center justify-center"></button>
+                        <button id="toggle-chat-panel-btn" title="Toggle Chat" class="p-2.5 md:p-3 rounded-full btn btn-secondary md:hidden flex items-center justify-center">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
+                        </button>
+                        <button id="hang-up-call-btn" title="Hang Up" class="p-2.5 md:p-3 rounded-full btn btn-danger"></button>
+                    </div>
+                </div>
+
+                <!-- Chat Messages -->
+                <div id="chat-messages-container" class="flex-1 p-4 overflow-y-auto custom-scrollbar space-y-4">
+                    <div class="text-center text-slate-500 py-10">Connect with a peer to begin conversation.</div>
+                </div>
+                <!-- Chat Input -->
+                <form id="chat-input-form" class="flex-shrink-0 p-3 border-t border-slate-700/50 flex items-center gap-2 bg-slate-800/30">
+                    <input type="file" id="chat-file-input" class="hidden">
+                    <button type="button" id="attach-file-chat-btn" title="Attach file" class="p-3 text-slate-400 hover:text-sky-400 transition-colors rounded-full hover:bg-slate-700/50 btn" disabled>
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path></svg>
+                    </button>
+                    <input type="text" id="chat-message-input" placeholder="Type a message..." class="flex-grow p-3 rounded-full outline-none transition text-sm bg-slate-700/50 border-transparent focus:border-sky-500" disabled>
+                    <button type="submit" id="send-chat-message-btn" class="p-3 rounded-full transition-all flex items-center justify-center btn btn-primary" disabled>
+                        <svg viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5"><path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z"></path></svg>
+                    </button>
+                </form>
+            </div>
+            
+            <!-- Chat Panel for Video Call (Mobile/Toggleable) -->
+            <div id="chat-panel-video-mode" class="glass-panel chat-panel-video-active flex flex-col md:hidden">
+                 <header class="p-3 border-b border-slate-700/50 flex items-center justify-between">
+                    <h3 class="text-md font-semibold text-white">Chat</h3>
+                    <button id="close-chat-panel-btn" class="p-1.5 rounded-full hover:bg-slate-700/50">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </button>
+                </header>
+                <div id="chat-messages-video-panel" class="flex-1 p-3 overflow-y-auto custom-scrollbar space-y-3"></div>
+                <form id="chat-input-form-video-panel" class="flex-shrink-0 p-2 border-t border-slate-700/50 flex items-center gap-2">
+                    <input type="text" id="chat-message-input-video-panel" placeholder="Message..." class="flex-grow p-2.5 rounded-full outline-none transition text-xs bg-slate-700/50 border-transparent focus:border-sky-500">
+                    <button type="submit" id="send-chat-message-btn-video-panel" class="p-2.5 rounded-full transition-all flex items-center justify-center btn btn-primary">
+                        <svg viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4"><path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z"></path></svg>
+                    </button>
+                </form>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Incoming Call Modal -->
+    <div id="incoming-call-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-[60] animate-fadeIn">
+        <div class="glass-panel rounded-xl p-8 shadow-2xl text-center animate-popIn w-full max-w-sm">
+            <h3 class="text-2xl font-bold text-white mb-2">Incoming Call</h3>
+            <div class="flex items-center justify-center my-6">
+                <div id="caller-avatar-modal" class="w-16 h-16 rounded-full bg-purple-600 flex items-center justify-center font-bold text-white text-2xl mr-4"></div>
+                <p id="caller-nickname-modal" class="text-xl text-slate-200"></p>
+            </div>
+            <div class="flex space-x-4">
+                <button id="accept-call-modal-btn" class="flex-1 font-bold py-3 px-6 rounded-lg btn btn-success">Accept</button>
+                <button id="decline-call-modal-btn" class="flex-1 font-bold py-3 px-6 rounded-lg btn btn-danger">Decline</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- System Message Toast -->
+    <div id="toast-message" class="fixed bottom-6 right-6 glass-panel px-6 py-3 rounded-lg shadow-xl text-sm text-white opacity-0 translate-y-4 transition-all duration-300 z-[70]">
+        <span id="toast-text"></span>
+    </div>
+
+    <script>
+        // JS will be extensive, similar to previous Aura P2P, but adapted for this new UI and fixed 720p quality.
+        // For brevity in this example, the JS structure would be:
+        // 1. DOM Element selections
+        // 2. State management object
+        // 3. UI update functions (many of these)
+        // 4. PeerJS handling (initialization, connection, data, call)
+        // 5. Stream handling (getUserMedia, screen share, replacing tracks FOR 720p)
+        // 6. Event listeners
+        // 7. Helper functions (formatting, etc.)
+        // Key JS changes:
+        // - No video quality selector handling.
+        // - `streamHandler.getMedia` will always request 720p constraints.
+        // - UI functions for the new modal, header, panels, and toast.
+        // - Logic for toggling the chat panel during video calls.
+        // - Draggable local video (can be added with a small library or custom JS).
+
+        const dom = {
+            nicknameModal: document.getElementById('nickname-modal'),
+            modalNicknameInput: document.getElementById('modal-nickname-input'),
+            modalConfirmNicknameBtn: document.getElementById('modal-confirm-nickname-btn'),
+            appContainer: document.getElementById('app-container'),
+            myNicknameHeader: document.getElementById('my-nickname-header'),
+            myIdHeaderContainer: document.getElementById('my-id-header-container'),
+            myIdHeader: document.getElementById('my-id-header'),
+            leftPanel: document.getElementById('left-panel'),
+            connectSection: document.getElementById('connect-section'),
+            receiverIdInput: document.getElementById('receiver-id-input'),
+            connectBtn: document.getElementById('connect-btn'),
+            connectionStatusText: document.getElementById('connection-status-text'),
+            peerInfoSection: document.getElementById('peer-info-section'),
+            peerAvatarInfo: document.getElementById('peer-avatar-info'),
+            peerNicknameInfo: document.getElementById('peer-nickname-info'),
+            peerIdInfo: document.getElementById('peer-id-info'),
+            startCallBtn: document.getElementById('start-call-btn'),
+            disconnectChatBtn: document.getElementById('disconnect-chat-btn'),
+            interactionArea: document.getElementById('interaction-area'),
+            videoCallView: document.getElementById('video-call-view'),
+            remoteVideo: document.getElementById('remote-video'),
+            localVideoWrapper: document.getElementById('local-video-wrapper'),
+            localVideo: document.getElementById('local-video'),
+            callControlsOverlay: document.getElementById('call-controls-overlay'),
+            toggleAudioBtn: document.getElementById('toggle-audio-btn'),
+            toggleVideoBtn: document.getElementById('toggle-video-btn'),
+            toggleScreenBtn: document.getElementById('toggle-screen-btn'),
+            pipBtn: document.getElementById('pip-btn'),
+            toggleChatPanelBtn: document.getElementById('toggle-chat-panel-btn'),
+            hangUpCallBtn: document.getElementById('hang-up-call-btn'),
+            chatMessagesContainer: document.getElementById('chat-messages-container'),
+            chatInputForm: document.getElementById('chat-input-form'),
+            chatFileInput: document.getElementById('chat-file-input'),
+            attachFileChatBtn: document.getElementById('attach-file-chat-btn'),
+            chatMessageInput: document.getElementById('chat-message-input'),
+            sendChatMessageBtn: document.getElementById('send-chat-message-btn'),
+            chatPanelVideoMode: document.getElementById('chat-panel-video-mode'),
+            closeChatPanelBtn: document.getElementById('close-chat-panel-btn'),
+            chatMessagesVideoPanel: document.getElementById('chat-messages-video-panel'),
+            chatInputFormVideoPanel: document.getElementById('chat-input-form-video-panel'),
+            chatMessageInputVideoPanel: document.getElementById('chat-message-input-video-panel'),
+            sendChatMessageBtnVideoPanel: document.getElementById('send-chat-message-btn-video-panel'),
+            incomingCallModal: document.getElementById('incoming-call-modal'),
+            callerAvatarModal: document.getElementById('caller-avatar-modal'),
+            callerNicknameModal: document.getElementById('caller-nickname-modal'),
+            acceptCallModalBtn: document.getElementById('accept-call-modal-btn'),
+            declineCallModalBtn: document.getElementById('decline-call-modal-btn'),
+            toastMessage: document.getElementById('toast-message'),
+            toastText: document.getElementById('toast-text'),
+        };
+
+        const icons = {
+            micOn: `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>`,
+            micOff: `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.586 15.586a7 7 0 01-9.172-9.172l9.172 9.172zM19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>`,
+            videoOn: `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>`,
+            videoOff: `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path></svg>`,
+            screenOn: `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>`,
+            screenActive: `<svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M5.25 5.25a3 3 0 00-3 3v10.5a3 3 0 003 3h13.5a3 3 0 003-3V8.25a3 3 0 00-3-3H5.25zm0 1.5H18.75a1.5 1.5 0 011.5 1.5v10.5a1.5 1.5 0 01-1.5 1.5H5.25a1.5 1.5 0 01-1.5-1.5V8.25a1.5 1.5 0 011.5-1.5zm6.22 8.22a.75.75 0 101.06-1.06L15.31 11H8.69l2.78 2.72zM12 8.25a.75.75 0 00-.75.75v3.19l-1.72-1.72a.75.75 0 00-1.06 1.06l3 3a.75.75 0 001.06 0l3-3a.75.75 0 10-1.06-1.06L12.75 12.19V9a.75.75 0 00-.75-.75z"></path></svg>`, // Example active screen share icon
+            pip: `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2zM16 3H8M16 9H8"></path></svg>`,
+            hangUp: `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 8l2-2m0 0l2 2m-2-2v2.5M20 14v.5a2.5 2.5 0 01-2.5 2.5h-10A2.5 2.5 0 015 14.5V8.25A2.25 2.25 0 017.25 6H10"></path></svg>`,
+        };
+        
+        const HD_VIDEO_CONSTRAINTS = { width: { ideal: 1280 }, height: { ideal: 720 } };
+
+        const state = {
+            peer: null,
+            myPeerId: null,
+            dataConnection: null,
+            mediaConnection: null,
+            localStream: null,
+            cameraStream: null, // To store camera stream separately when screen sharing
+            isScreenSharing: false,
+            myNickname: localStorage.getItem('auraConnectNickname') || '',
+            remoteNickname: 'Peer',
+            typingTimeout: null,
+            isChatPanelOpenInVideoMode: false,
+            isCallActive: false,
+            toastTimeout: null,
+        };
+
+        const ui = {
+            init() {
+                dom.toggleAudioBtn.innerHTML = icons.micOn;
+                dom.toggleVideoBtn.innerHTML = icons.videoOn;
+                dom.toggleScreenBtn.innerHTML = icons.screenOn;
+                dom.pipBtn.innerHTML = icons.pip;
+                dom.hangUpCallBtn.innerHTML = icons.hangUp;
+                if (!('pictureInPictureEnabled' in document) || !document.pictureInPictureEnabled) {
+                    dom.pipBtn.classList.add('hidden');
+                }
+
+                if (state.myNickname) {
+                    dom.nicknameModal.classList.add('hidden');
+                    dom.appContainer.classList.remove('hidden');
+                    dom.myNicknameHeader.textContent = state.myNickname;
+                    peerHandler.initialize();
+                } else {
+                    dom.nicknameModal.classList.remove('hidden');
+                    dom.appContainer.classList.add('hidden');
+                }
+            },
+            showToast(message, duration = 3000) {
+                dom.toastText.textContent = message;
+                dom.toastMessage.classList.remove('opacity-0', 'translate-y-4');
+                dom.toastMessage.classList.add('opacity-100', 'translate-y-0');
+                clearTimeout(state.toastTimeout);
+                state.toastTimeout = setTimeout(() => {
+                    dom.toastMessage.classList.remove('opacity-100', 'translate-y-0');
+                    dom.toastMessage.classList.add('opacity-0', 'translate-y-4');
+                }, duration);
+            },
+            updateAvatar(element, nickname) {
+                const initial = (nickname || '?').charAt(0).toUpperCase();
+                element.textContent = initial;
+                const colors = ['bg-sky-500', 'bg-emerald-500', 'bg-indigo-500', 'bg-purple-500', 'bg-pink-500', 'bg-amber-500'];
+                const colorClass = colors[initial.charCodeAt(0) % colors.length];
+                element.className = element.className.replace(/bg-\w+-\d+/g, ''); // Remove old color
+                element.classList.add(colorClass);
+            },
+            resetMainChatUI() {
+                dom.chatMessagesContainer.innerHTML = '<div class="text-center text-slate-500 py-10">Connect with a peer to begin conversation.</div>';
+                dom.chatMessageInput.value = '';
+                dom.chatMessageInput.disabled = true;
+                dom.sendChatMessageBtn.disabled = true;
+                dom.attachFileChatBtn.disabled = true;
+            },
+            enableChatInput() {
+                dom.chatMessagesContainer.innerHTML = ''; // Clear initial message
+                dom.chatMessageInput.disabled = false;
+                dom.sendChatMessageBtn.disabled = false;
+                dom.attachFileChatBtn.disabled = false;
+                 // For video panel chat
+                dom.chatMessagesVideoPanel.innerHTML = '';
+                dom.chatMessageInputVideoPanel.disabled = false;
+                dom.sendChatMessageBtnVideoPanel.disabled = false;
+
+            },
+            appendMessage(data, originType, targetPanel = 'main') { // targetPanel can be 'main' or 'video'
+                const isSent = originType === 'sent';
+                const wrapper = document.createElement('div');
+                wrapper.className = `flex animate-fadeIn w-full ${isSent ? 'justify-end' : 'justify-start'}`;
+                
+                const bubbleContent = document.createElement('div');
+                bubbleContent.className = `p-2.5 rounded-xl max-w-[85%] shadow text-sm relative group ${isSent ? 'bg-sky-600 text-white message-bubble-sent' : 'glass-panel text-slate-100 message-bubble-received'}`;
+
+                if (data.type === 'chat') {
+                    const textElement = document.createElement('p');
+                    textElement.className = 'break-words whitespace-pre-wrap';
+                    const linkRegex = /(https?:\/\/[^\s!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]+)/g;
+                    const escapedText = data.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"); 
+                    textElement.innerHTML = escapedText.replace(linkRegex, '<a href="$1" target="_blank" rel="noopener noreferrer" class="underline hover:text-sky-300 transition-colors">$1</a>');
+                    bubbleContent.appendChild(textElement);
+                } else if (data.type === 'file') {
+                    const fileContainer = document.createElement('div');
+                    fileContainer.className = 'flex items-center gap-2 p-1.5 rounded-lg bg-black/20';
+                    fileContainer.innerHTML = `<div class="flex-shrink-0"><svg class="w-7 h-7 ${isSent ? 'text-sky-200' : 'text-slate-300'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg></div>`;
+                    const fileTextDetails = document.createElement('div');
+                    fileTextDetails.innerHTML = `<p class="font-medium truncate max-w-[120px] sm:max-w-[150px]">${data.filename}</p><p class="text-xs opacity-70">${(data.filesize / 1024 / 1024).toFixed(2)} MB</p>`;
+                    fileContainer.appendChild(fileTextDetails);
+                    const downloadBtn = document.createElement('button');
+                    downloadBtn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>`;
+                    downloadBtn.className = 'ml-auto p-1.5 rounded-full hover:bg-white/20 transition focus:outline-none';
+                    downloadBtn.title = "Download file";
+                    downloadBtn.onclick = () => helpers.downloadFile(data);
+                    fileContainer.appendChild(downloadBtn);
+                    bubbleContent.appendChild(fileContainer);
+                }
+                wrapper.appendChild(bubbleContent);
+                
+                if (targetPanel === 'main' || !state.isCallActive) {
+                    dom.chatMessagesContainer.appendChild(wrapper.cloneNode(true));
+                    ui.scrollToBottom(dom.chatMessagesContainer);
+                }
+                if (targetPanel === 'video' || state.isCallActive) {
+                     dom.chatMessagesVideoPanel.appendChild(wrapper);
+                     ui.scrollToBottom(dom.chatMessagesVideoPanel);
+                }
+            },
+            setConnectionStatus(text, type = 'info') { // type: 'info', 'success', 'error'
+                dom.connectionStatusText.textContent = text;
+                dom.connectionStatusText.classList.remove('text-sky-400', 'text-emerald-400', 'text-red-400', 'text-slate-400');
+                if (type === 'success') dom.connectionStatusText.classList.add('text-emerald-400');
+                else if (type === 'error') dom.connectionStatusText.classList.add('text-red-400');
+                else if (type === 'connecting') dom.connectionStatusText.classList.add('text-sky-400');
+                else dom.connectionStatusText.classList.add('text-slate-400');
+            },
+            showPeerInfo(nickname, peerId) {
+                ui.updateAvatar(dom.peerAvatarInfo, nickname);
+                dom.peerNicknameInfo.textContent = nickname;
+                dom.peerIdInfo.textContent = peerId.substring(0,12) + "...";
+                dom.connectSection.classList.add('hidden');
+                dom.peerInfoSection.classList.remove('hidden');
+            },
+            hidePeerInfo() {
+                dom.connectSection.classList.remove('hidden');
+                dom.peerInfoSection.classList.add('hidden');
+            },
+            toggleVideoCallView(show) {
+                state.isCallActive = show;
+                dom.videoCallView.classList.toggle('hidden', !show);
+                dom.leftPanel.classList.toggle('md:flex', !show); // Hide left panel on desktop during call
+                dom.leftPanel.classList.toggle('hidden', show && window.innerWidth >= 768); // Check for md breakpoint
+                
+                dom.interactionArea.classList.toggle('bg-slate-900/30', !show); // Remove chat bg when video is full
+                dom.chatMessagesContainer.classList.toggle('hidden', show);
+                dom.chatInputForm.classList.toggle('hidden', show);
+
+                if (show) {
+                    // Reset chat panel for video mode to ensure it's closed initially
+                    dom.chatPanelVideoMode.classList.remove('open');
+                    state.isChatPanelOpenInVideoMode = false;
+                } else {
+                    if (document.pictureInPictureElement) document.exitPictureInPicture();
+                    streamHandler.stopAllStreams();
+                    // Show chat UI if it was hidden
+                    dom.chatMessagesContainer.classList.remove('hidden');
+                    dom.chatInputForm.classList.remove('hidden');
+                }
+            },
+            toggleChatPanelInVideoMode() {
+                state.isChatPanelOpenInVideoMode = !state.isChatPanelOpenInVideoMode;
+                dom.chatPanelVideoMode.classList.toggle('open', state.isChatPanelOpenInVideoMode);
+            },
+            scrollToBottom: (element) => setTimeout(() => { element.scrollTop = element.scrollHeight; }, 50),
+        };
+        
+        const streamHandler = {
+            async getMediaStream(isScreen = false) {
+                try {
+                    const audioConstraints = { echoCancellation: true, noiseSuppression: true };
+                    let stream;
+                    if (isScreen) {
+                        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }); // Request audio with screen share
+                        state.isScreenSharing = true;
+                        ui.showToast('Screen sharing started.');
+                        peerHandler.sendData({ type: 'system', event: 'screen_share_start' });
+                        dom.toggleScreenBtn.innerHTML = icons.screenActive; // Update icon
+                        dom.toggleScreenBtn.classList.add('text-sky-400');
+                    } else {
+                        stream = await navigator.mediaDevices.getUserMedia({ video: HD_VIDEO_CONSTRAINTS, audio: audioConstraints });
+                        state.isScreenSharing = false;
+                        dom.toggleScreenBtn.innerHTML = icons.screenOn;
+                        dom.toggleScreenBtn.classList.remove('text-sky-400');
+                    }
+                    
+                    if (state.localStream) { // If a stream already exists, stop its tracks
+                        state.localStream.getTracks().forEach(track => track.stop());
+                    }
+                    state.localStream = stream;
+
+                    if (!isScreen && !state.cameraStream) { // Store initial camera stream
+                         state.cameraStream = stream;
+                    } else if (!isScreen && state.cameraStream && state.cameraStream !== stream) {
+                        // If we are switching back to camera, and had a camera stream, update it.
+                        state.cameraStream.getTracks().forEach(track => track.stop());
+                        state.cameraStream = stream;
+                    }
+
+
+                    dom.localVideo.srcObject = stream;
+
+                    if (state.mediaConnection && state.mediaConnection.open) {
+                        stream.getTracks().forEach(track => {
+                            const sender = state.mediaConnection.peerConnection.getSenders().find(s => s.track && s.track.kind === track.kind);
+                            if (sender) {
+                                sender.replaceTrack(track);
+                            }
+                        });
+                    }
+                    
+                    if (isScreen) {
+                        stream.getVideoTracks()[0].onended = () => { // Handle browser's "Stop sharing" button
+                           if(state.isScreenSharing) streamHandler.switchToCameraStream();
+                        };
+                    }
+                    return stream;
+
+                } catch (err) {
+                    ui.showToast('Error accessing media devices.', 3000);
+                    console.error("Media access error:", err);
+                    if (state.isScreenSharing) { // If screen share failed, try to revert to camera
+                        state.isScreenSharing = false;
+                        dom.toggleScreenBtn.innerHTML = icons.screenOn;
+                         dom.toggleScreenBtn.classList.remove('text-sky-400');
+                    }
+                    return null;
+                }
+            },
+            async switchToCameraStream() {
+                if (state.isScreenSharing) { // Only if currently screen sharing
+                    state.isScreenSharing = false;
+                    peerHandler.sendData({ type: 'system', event: 'screen_share_stop' });
+                    dom.toggleScreenBtn.innerHTML = icons.screenOn;
+                    dom.toggleScreenBtn.classList.remove('text-sky-400');
+                    ui.showToast('Screen sharing stopped.');
+                    
+                    if (state.cameraStream) {
+                        // Re-get camera stream to ensure it's fresh and replace tracks
+                        const newCameraStream = await navigator.mediaDevices.getUserMedia({ video: HD_VIDEO_CONSTRAINTS, audio: { echoCancellation: true, noiseSuppression: true } });
+                        if (state.localStream) state.localStream.getTracks().forEach(t => t.stop()); // Stop current (screen) stream tracks
+                        state.localStream = newCameraStream;
+                        state.cameraStream = newCameraStream; // Update stored camera stream
+                        dom.localVideo.srcObject = state.localStream;
+
+                        if (state.mediaConnection && state.mediaConnection.open) {
+                            state.localStream.getTracks().forEach(track => {
+                                const sender = state.mediaConnection.peerConnection.getSenders().find(s => s.track && s.track.kind === track.kind);
+                                if (sender) sender.replaceTrack(track);
+                            });
+                        }
+                    } else { // Fallback if no cameraStream was stored (should not happen in normal flow)
+                        await streamHandler.getMediaStream(false);
+                    }
+                }
+            },
+            stopAllStreams() {
+                if (state.localStream) {
+                    state.localStream.getTracks().forEach(track => track.stop());
+                    state.localStream = null;
+                }
+                if (state.cameraStream && state.cameraStream !== state.localStream) { // Ensure not double-stopping
+                    state.cameraStream.getTracks().forEach(track => track.stop());
+                    state.cameraStream = null;
+                }
+                dom.localVideo.srcObject = null;
+                dom.remoteVideo.srcObject = null;
+                state.isScreenSharing = false;
+                dom.toggleScreenBtn.innerHTML = icons.screenOn;
+                dom.toggleScreenBtn.classList.remove('text-sky-400');
+                // Reset audio/video button states
+                dom.toggleAudioBtn.innerHTML = icons.micOn;
+                dom.toggleVideoBtn.innerHTML = icons.videoOn;
+
+            }
+        };
+
+        const peerHandler = {
+            initialize() {
+                ui.setConnectionStatus('Initializing Aura ID...', 'info');
+                try {
+                    state.peer = new Peer(undefined, { debug: 0 });
+                    state.peer.on('open', id => {
+                        state.myPeerId = id;
+                        dom.myIdHeader.textContent = id;
+                        dom.connectBtn.disabled = false;
+                        ui.setConnectionStatus("Ready. Enter Peer's Aura ID.", 'info');
+                    });
+                    state.peer.on('connection', conn => {
+                        if (state.dataConnection && state.dataConnection.open) {
+                            conn.on('open', () => conn.send({ type: 'system', event: 'busy' }));
+                            setTimeout(() => conn.close(), 500); // Give time for busy message to send
+                            return;
+                        }
+                        state.dataConnection = conn;
+                        peerHandler.setupDataConnectionEvents(conn);
+                    });
+                    state.peer.on('call', call => {
+                        // If already in a call, reject new one.
+                        if (state.mediaConnection && state.mediaConnection.open) {
+                            // Can't send data via mediaConnection directly to reject.
+                            // The peer attempting to call will eventually time out or error.
+                            // Or, we can close the new call object.
+                            call.close(); 
+                            return;
+                        }
+                        state.mediaConnection = call;
+                        state.remoteNickname = call.metadata.nickname;
+                        dom.callerNicknameModal.textContent = state.remoteNickname;
+                        ui.updateAvatar(dom.callerAvatarModal, state.remoteNickname);
+                        dom.incomingCallModal.classList.remove('hidden');
+                    });
+                    state.peer.on('error', err => {
+                        console.error('PeerJS error:', err);
+                        ui.setConnectionStatus(`Peer Error: ${err.type}`, 'error');
+                        ui.showToast(`Peer Error: ${err.type}`, 4000);
+                        if (err.type === 'peer-unavailable' || err.type === 'network' || err.type === 'server-error') {
+                           // Allow trying to connect again
+                           dom.connectBtn.disabled = false;
+                           dom.receiverIdInput.disabled = false;
+                        }
+                        if (state.dataConnection && err.type !== 'disconnected') { // If error on existing connection, reset relevant parts
+                            peerHandler.closeDataConnection(); // This will trigger UI reset via 'close' event
+                        }
+                    });
+                     state.peer.on('disconnected', () => {
+                        ui.setConnectionStatus('Disconnected from signaling. Reconnecting...', 'error');
+                        ui.showToast('Lost signaling connection. Attempting to reconnect...', 4000);
+                        // PeerJS attempts to reconnect automatically. If it fails, an error event might be triggered.
+                    });
+
+                } catch (error) {
+                    alert("Critical Error: PeerJS could not be initialized. Please refresh the page.");
+                    ui.setConnectionStatus('PeerJS Initialization Failed!', 'error');
+                }
+            },
+            connectToPeer() {
+                const receiverId = dom.receiverIdInput.value.trim();
+                if (!receiverId) {
+                    ui.showToast('Please enter a Peer ID.', 2000);
+                    return;
+                }
+                if (receiverId === state.myPeerId) {
+                    ui.showToast("You can't connect to yourself.", 2000);
+                    return;
+                }
+                ui.setConnectionStatus(`Connecting to ${receiverId.substring(0,8)}...`, 'connecting');
+                dom.connectBtn.disabled = true;
+                dom.receiverIdInput.disabled = true;
+
+                const conn = state.peer.connect(receiverId, { reliable: true, metadata: { nickname: state.myNickname } });
+                state.dataConnection = conn;
+                peerHandler.setupDataConnectionEvents(conn);
+            },
+            setupDataConnectionEvents(conn) {
+                conn.on('open', () => {
+                    state.remoteNickname = conn.metadata.nickname || 'Peer';
+                    ui.showPeerInfo(state.remoteNickname, conn.peer);
+                    ui.setConnectionStatus(`Connected with ${state.remoteNickname}!`, 'success');
+                    ui.showToast(`Connected with ${state.remoteNickname}!`, 3000);
+                    ui.enableChatInput();
+                    dom.receiverIdInput.value = ''; // Clear input after successful connection
+                });
+                conn.on('data', data => peerHandler.handleIncomingData(data));
+                conn.on('close', () => peerHandler.closeDataConnectionCleanup());
+                conn.on('error', err => {
+                    console.error('Connection error:', err);
+                    ui.showToast(`Connection error: ${err.type}`, 3000);
+                    peerHandler.closeDataConnectionCleanup(); // Assume connection is lost
+                });
+            },
+            closeDataConnection() {
+                if (state.dataConnection) {
+                    state.dataConnection.close(); // This will trigger 'close' event for cleanup
+                }
+                if(state.mediaConnection) { // Also close media connection if chat disconnects
+                    state.mediaConnection.close();
+                }
+            },
+            closeDataConnectionCleanup() { // Called by 'close' event or forceful disconnect
+                if (state.isCallActive) ui.toggleVideoCallView(false); // End call view if active
+                
+                ui.setConnectionStatus("Disconnected. Ready to connect.", 'info');
+                if (state.dataConnection) ui.showToast(`${state.remoteNickname || 'Peer'} disconnected.`, 3000);
+                
+                ui.hidePeerInfo();
+                ui.resetMainChatUI();
+
+                state.dataConnection = null;
+                state.remoteNickname = 'Peer';
+                
+                dom.connectBtn.disabled = false;
+                dom.receiverIdInput.disabled = false;
+            },
+            handleIncomingData(data) {
+                if (typeof data !== 'object' || data === null || !data.type) return;
+                const sender = data.senderNickname || state.remoteNickname;
+                 switch (data.type) {
+                    case 'chat':
+                        ui.appendMessage(data, 'received');
+                        if (state.isCallActive && !state.isChatPanelOpenInVideoMode && window.innerWidth < 768) {
+                           // If on mobile, in call, chat panel closed, maybe a small notification?
+                           // Or rely on user to open chat panel. For now, just add to panel.
+                        }
+                        break;
+                    case 'file':
+                        ui.appendMessage(data, 'received');
+                        break;
+                    case 'typing':
+                        // This feature might be better removed for "less is more" or made very subtle.
+                        // For now, let's skip implementing the typing indicator in this version.
+                        break;
+                    case 'system':
+                        if (data.event === 'busy') {
+                            ui.setConnectionStatus(`Peer ${dom.receiverIdInput.value.substring(0,8)}... is busy.`, 'error');
+                            ui.showToast('The peer is currently busy.', 3000);
+                            if (state.dataConnection) state.dataConnection.close(); // Close our attempted connection
+                            dom.connectBtn.disabled = false;
+                            dom.receiverIdInput.disabled = false;
+                        } else if (data.event === 'screen_share_start') {
+                            ui.showToast(`${sender} started screen sharing.`);
+                        } else if (data.event === 'screen_share_stop') {
+                           ui.showToast(`${sender} stopped screen sharing.`);
+                        }
+                        break;
+                }
+            },
+            sendData(payload) {
+                if (state.dataConnection && state.dataConnection.open) {
+                    try {
+                        state.dataConnection.send(payload);
+                        return true;
+                    } catch (error) {
+                        console.error("Send data error:", error);
+                        ui.showToast("Failed to send data. Connection may be lost.", true);
+                        return false;
+                    }
+                }
+                return false;
+            },
+            async startCall() {
+                if (!state.dataConnection || !state.dataConnection.open) {
+                    ui.showToast("Not connected to a peer.", 2000); return;
+                }
+                const stream = await streamHandler.getMediaStream(false); // Start with camera
+                if (stream) {
+                    const call = state.peer.call(state.dataConnection.peer, stream, { metadata: { nickname: state.myNickname } });
+                    state.mediaConnection = call;
+                    peerHandler.setupMediaConnectionEvents(call);
+                    ui.toggleVideoCallView(true);
+                }
+            },
+            async answerCall() {
+                dom.incomingCallModal.classList.add('hidden');
+                const stream = await streamHandler.getMediaStream(false); // Start with camera
+                if (stream) {
+                    state.mediaConnection.answer(stream); // Answer the existing mediaConnection from 'call' event
+                    peerHandler.setupMediaConnectionEvents(state.mediaConnection);
+                    ui.toggleVideoCallView(true);
+                }
+            },
+            declineCall() {
+                dom.incomingCallModal.classList.add('hidden');
+                if (state.mediaConnection) {
+                    state.mediaConnection.close(); // Close the call object initiated by the remote peer
+                    state.mediaConnection = null;
+                }
+            },
+            setupMediaConnectionEvents(call) {
+                call.on('stream', remoteStream => {
+                    dom.remoteVideo.srcObject = remoteStream;
+                    dom.remoteVideo.play().catch(e => console.warn("Remote video play failed", e));
+                });
+                call.on('close', () => {
+                    ui.toggleVideoCallView(false);
+                    ui.showToast('Call ended.', 3000);
+                    state.mediaConnection = null;
+                });
+                call.on('error', err => {
+                    console.error('Call error:', err);
+                    ui.showToast(`Call error: ${err.type}`, 3000);
+                    ui.toggleVideoCallView(false);
+                    state.mediaConnection = null;
+                });
+            }
+        };
+
+        const helpers = {
+            downloadFile(fileData) {
+                try {
+                    const blob = new Blob([fileData.data], { type: fileData.filetype });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = fileData.filename || 'downloaded_file';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    ui.showToast(`Downloading ${fileData.filename}...`, 2000);
+                } catch (e) {
+                    console.error("Download failed", e);
+                    ui.showToast("Failed to initiate download.", 3000);
+                }
+            }
+        };
+
+        const eventListeners = {
+            init() {
+                dom.modalConfirmNicknameBtn.addEventListener('click', eventListeners.onConfirmNickname);
+                dom.modalNicknameInput.addEventListener('keypress', e => { if (e.key === 'Enter') eventListeners.onConfirmNickname(); });
+                dom.myIdHeaderContainer.addEventListener('click', eventListeners.onCopyMyId);
+                dom.connectBtn.addEventListener('click', peerHandler.connectToPeer);
+                dom.receiverIdInput.addEventListener('keypress', e => { if (e.key === 'Enter') peerHandler.connectToPeer(); });
+                
+                dom.disconnectChatBtn.addEventListener('click', () => peerHandler.closeDataConnection());
+                dom.startCallBtn.addEventListener('click', peerHandler.startCall);
+
+                dom.chatInputForm.addEventListener('submit', eventListeners.onSendMessage);
+                dom.attachFileChatBtn.addEventListener('click', () => dom.chatFileInput.click());
+                dom.chatFileInput.addEventListener('change', eventListeners.onFileSelect);
+                
+                // Video Panel Chat (for mobile/toggled view)
+                dom.chatInputFormVideoPanel.addEventListener('submit', eventListeners.onSendMessageVideoPanel);
+
+
+                // Call Controls
+                dom.toggleAudioBtn.addEventListener('click', eventListeners.onToggleAudio);
+                dom.toggleVideoBtn.addEventListener('click', eventListeners.onToggleVideo);
+                dom.toggleScreenBtn.addEventListener('click', () => state.isScreenSharing ? streamHandler.switchToCameraStream() : streamHandler.getMediaStream(true));
+                dom.pipBtn.addEventListener('click', eventListeners.onPipToggle);
+                dom.hangUpCallBtn.addEventListener('click', () => { if(state.mediaConnection) state.mediaConnection.close(); });
+                dom.toggleChatPanelBtn.addEventListener('click', ui.toggleChatPanelInVideoMode);
+                dom.closeChatPanelBtn.addEventListener('click', ui.toggleChatPanelInVideoMode);
+
+
+                // Incoming Call Modal
+                dom.acceptCallModalBtn.addEventListener('click', peerHandler.answerCall);
+                dom.declineCallModalBtn.addEventListener('click', peerHandler.declineCall);
+                
+                // Show/Hide call controls on video hover
+                dom.videoCallView.addEventListener('mouseenter', () => dom.callControlsOverlay.classList.remove('opacity-0'));
+                dom.videoCallView.addEventListener('mouseleave', () => dom.callControlsOverlay.classList.add('opacity-0'));
+
+
+                window.addEventListener('beforeunload', () => {
+                    if (state.peer && !state.peer.destroyed) {
+                        // Attempt a graceful disconnect message if connected
+                        if (state.dataConnection && state.dataConnection.open) {
+                            try { state.dataConnection.send({type: 'system', event: 'disconnecting'}); } catch(e){}
+                        }
+                        state.peer.destroy();
+                    }
+                });
+            },
+            onConfirmNickname() {
+                const nickname = dom.modalNicknameInput.value.trim();
+                if (nickname.length > 0 && nickname.length <= 30) {
+                    state.myNickname = nickname;
+                    localStorage.setItem('auraConnectNickname', nickname);
+                    dom.myNicknameHeader.textContent = state.myNickname;
+                    dom.nicknameModal.classList.add('hidden');
+                    dom.appContainer.classList.remove('hidden');
+                    peerHandler.initialize();
+                } else {
+                    ui.showToast('Nickname must be 1-30 characters.', 2000);
+                }
+            },
+            onCopyMyId() {
+                if (state.myPeerId) {
+                    navigator.clipboard.writeText(state.myPeerId)
+                        .then(() => ui.showToast('Aura ID copied to clipboard!', 2000))
+                        .catch(() => ui.showToast('Failed to copy ID.', 2000));
+                }
+            },
+            _sendMessageLogic(messageText, isFromVideoPanel = false) {
+                if (!messageText) return;
+                const payload = { type: 'chat', text: messageText, senderNickname: state.myNickname, timestamp: Date.now() };
+                if (peerHandler.sendData(payload)) {
+                    ui.appendMessage(payload, 'sent', isFromVideoPanel && state.isCallActive ? 'video' : 'main');
+                    if (isFromVideoPanel) dom.chatMessageInputVideoPanel.value = '';
+                    else dom.chatMessageInput.value = '';
+                } else {
+                    ui.showToast("Failed to send message.", 2000);
+                }
+            },
+            onSendMessage(e) {
+                e.preventDefault();
+                const text = dom.chatMessageInput.value.trim();
+                eventListeners._sendMessageLogic(text, false);
+            },
+            onSendMessageVideoPanel(e) {
+                e.preventDefault();
+                const text = dom.chatMessageInputVideoPanel.value.trim();
+                eventListeners._sendMessageLogic(text, true);
+            },
+            onFileSelect(e) {
+                const file = e.target.files[0];
+                if (!file) return;
+                dom.chatFileInput.value = ''; // Reset file input
+
+                if (file.size > 100 * 1024 * 1024) { // 100MB limit
+                    ui.showToast('File size max 100MB.', 3000);
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = re => {
+                    const payload = { type: 'file', filename: file.name, filetype: file.type, filesize: file.size, data: re.target.result, senderNickname: state.myNickname, timestamp: Date.now() };
+                    if(peerHandler.sendData(payload)) {
+                        ui.appendMessage(payload, 'sent');
+                        ui.showToast(`Sending ${file.name}...`, 2000);
+                    } else {
+                        ui.showToast("Failed to send file.", 2000);
+                    }
+                };
+                reader.onerror = () => { ui.showToast("Error reading file.", 3000); };
+                reader.readAsArrayBuffer(file);
+            },
+            onToggleAudio() {
+                if (!state.localStream) return;
+                const audioTrack = state.localStream.getAudioTracks()[0];
+                if (audioTrack) {
+                    audioTrack.enabled = !audioTrack.enabled;
+                    dom.toggleAudioBtn.innerHTML = audioTrack.enabled ? icons.micOn : icons.micOff;
+                    ui.showToast(audioTrack.enabled ? 'Microphone ON' : 'Microphone OFF', 1500);
+                }
+            },
+            onToggleVideo() {
+                if (!state.localStream || state.isScreenSharing) {
+                    if(state.isScreenSharing) ui.showToast("Stop screen sharing to toggle camera.", 2000);
+                    return;
+                }
+                const videoTrack = state.localStream.getVideoTracks()[0];
+                if (videoTrack) {
+                    videoTrack.enabled = !videoTrack.enabled;
+                    dom.toggleVideoBtn.innerHTML = videoTrack.enabled ? icons.videoOn : icons.videoOff;
+                    dom.localVideoWrapper.style.display = videoTrack.enabled ? 'block' : 'none';
+                    ui.showToast(videoTrack.enabled ? 'Camera ON' : 'Camera OFF', 1500);
+                }
+            },
+            async onPipToggle() {
+                if (!dom.remoteVideo.srcObject || !document.pictureInPictureEnabled) return;
+                try {
+                    if (document.pictureInPictureElement === dom.remoteVideo) {
+                        await document.exitPictureInPicture();
+                    } else {
+                        await dom.remoteVideo.requestPictureInPicture();
+                    }
+                } catch (err) {
+                    console.error("PiP Error:", err);
+                    ui.showToast("PiP not available or failed.", 2000);
+                }
+            }
+        };
+
+        // --- Initialize ---
+        ui.init();
+        eventListeners.init();
+
+    </script>
+</body>
+</html>
